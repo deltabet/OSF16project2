@@ -11,9 +11,15 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
+#include "vm/frame_table.h"
+#include "vm/page_table.h"
+#include "vm/swap.h"
 #endif
+
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -92,7 +98,9 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
+	//printf("before frame\n");
+	//frame_table_init();
+	//printf("after frame\n");
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -140,12 +148,16 @@ thread_tick (void)
 }
 
 /* Prints thread statistics. */
+
 void
 thread_print_stats (void) 
 {
   printf ("Thread: %lld idle ticks, %lld kernel ticks, %lld user ticks\n",
           idle_ticks, kernel_ticks, user_ticks);
 }
+
+
+
 
 /* Creates a new kernel thread named NAME with the given initial
    PRIORITY, which executes FUNCTION passing AUX as the argument,
@@ -198,9 +210,24 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+	//add child
+	t->parent = thread_tid();
+	struct child* child_add = malloc(sizeof(struct child));
+	if (!child_add)
+	{
+		return TID_ERROR;
+	}
+	sema_init(&child_add->load_s, 0);
+	sema_init(&child_add->exit_s, 0);
+  child_add->load_status = 0;
+  child_add->pid = t->tid;
+  child_add->is_waiting = 0;
+	child_add->exit = 0;
+  list_push_back(&thread_current()->child_list, &child_add->elem);
+	t->child = child_add;
   /* Add to run queue. */
   thread_unblock (t);
-
+	//printf("new thread %d\n", t->tid);
   return tid;
 }
 
@@ -215,7 +242,6 @@ thread_block (void)
 {
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
-
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
 }
@@ -281,15 +307,23 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
-
 #ifdef USERPROG
   process_exit ();
 #endif
-
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
+	struct thread *t = thread_current();
+	struct list_elem *next, *e = list_begin(&t->list_lock);
+	while(e != list_end(&t->list_lock))
+	{
+		next = list_next(e);
+		struct lock* this_lock = list_entry(e, struct lock, elem);
+		lock_release(this_lock);
+		list_remove(&this_lock->elem);
+		e = next;
+	}
   list_remove (&thread_current()->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
@@ -459,6 +493,8 @@ init_thread (struct thread *t, const char *name, int priority)
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
+	//char* ex_pointer;
+	//name = strtok_r(name, " ", &ex_pointer);
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
@@ -467,6 +503,20 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+
+	//no child or parent
+	list_init(&t->child_list);
+	t->child = NULL;
+	t->parent = NULL;
+
+	//init file list
+	//min file num is 2
+	list_init(&t->file_list);
+	t->fd = 2;
+	
+
+	//init lock list
+	list_init(&t->list_lock);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -582,3 +632,48 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+
+void inc_load_s(struct child* child)
+{
+	sema_up(&child->load_s);
+}
+
+void dec_load_s(struct child* child)
+{
+	sema_down(&child->load_s);
+}
+
+void inc_exit_s(struct child* child)
+{
+	sema_up(&child->exit_s);
+}
+
+void dec_exit_s(struct child* child)
+{
+	sema_down(&child->exit_s);
+}
+
+int thread_running(int tid){
+	struct list_elem* e;
+	for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e)){
+      struct thread *t = list_entry(e, struct thread, allelem);
+      if (t->tid == tid){
+			  return 1;
+			}
+  }
+  return 0; 
+}
+
+struct thread* get_thread(int tid){
+	struct list_elem* e;
+	for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e)){
+      struct thread *t = list_entry(e, struct thread, allelem);
+      if (t->tid == tid){
+			  return t;
+			}
+  }
+  return NULL; 
+}

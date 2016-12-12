@@ -4,6 +4,26 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
+#include <hash.h>
+
+/*#include "userprog/syscall.h"*/
+
+struct child{
+  struct list_elem elem;
+	int is_waiting;
+	int load_status;
+	int status;
+  int pid;
+	int exit;
+  struct semaphore load_s;
+	struct semaphore exit_s;
+};
+
+struct thread_lock{
+	struct list_elem elem;
+	struct lock lock;
+};
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -100,7 +120,26 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+		//file list
+		struct list file_list;
+		int fd;
+
+		//child list
+		struct list child_list;
+		struct child* child;
+
+		//list of locks threads
+		struct list list_lock;
+
+		//supp page table hash
+		struct hash page_table;
+
+		int parent;
+
+		struct dir *cwd;
   };
+
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -137,5 +176,15 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+
+int thread_running(int tid);
+
+void inc_load_s(struct child* child);
+void dec_load_s(struct child* child);
+void inc_exit_s(struct child* child);
+void dec_exit_s(struct child* child);
+
+struct thread* get_thread(int tid);
 
 #endif /* threads/thread.h */

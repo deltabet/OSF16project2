@@ -28,6 +28,9 @@
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
+#include "vm/frame_table.h"
+#include "vm/page_table.h"
+#include "vm/swap.h"
 #else
 #include "tests/threads/tests.h"
 #endif
@@ -113,6 +116,8 @@ main (void)
 #ifdef USERPROG
   exception_init ();
   syscall_init ();
+	frame_table_init();
+	//page_table_init();
 #endif
 
   /* Start thread scheduler and enable interrupts. */
@@ -124,9 +129,11 @@ main (void)
   /* Initialize file system. */
   ide_init ();
   locate_block_devices ();
+	swap_init();
   filesys_init (format_filesys);
 #endif
-
+	
+	
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */
@@ -340,7 +347,6 @@ run_actions (char **argv)
       a->function (argv);
       argv += a->argc;
     }
-  
 }
 
 /* Prints a kernel command line help message and powers off the

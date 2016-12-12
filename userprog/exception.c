@@ -2,8 +2,15 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "userprog/gdt.h"
+#include "userprog/syscall.h"
+#include "userprog/pagedir.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
+#include "vm/frame_table.h"
+#include "vm/page_table.h"
+#include <debug.h>
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -89,7 +96,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_exit (); 
+      sys_exit(-1); 
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -151,11 +158,124 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
+ /* printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+  kill (f);*/
+	//write violation
+	if(!not_present){
+		//printf("not present\n");
+		/*printf ("Page fault at %p: %s error %s page in %s context.\n",
+		        fault_addr,
+		        not_present ? "not present" : "rights violation",
+		        write ? "writing" : "reading",
+		        user ? "user" : "kernel");
+			kill(f);*/
+			sys_exit(-1);
+	}
+	//if not expect data at address
+	//if kernel
+	//if(fault_addr == 0){
+		//debug_backtrace();
+		//PANIC("ok\n");
+	//}
+	if (is_kernel_vaddr(fault_addr) || fault_addr < 0x08048000 || fault_addr == NULL){
+		//printf("exception bad addr %d\n", fault_addr);
+		//PANIC("let's do this\n");
+		/*printf ("Page fault at %p: %s error %s page in %s context.\n",
+		        fault_addr,
+		        not_present ? "not present" : "rights violation",
+		        write ? "writing" : "reading",
+		        user ? "user" : "kernel");
+			kill(f);*/
+			sys_exit(-1);
+	}
+	int success = 1;
+	//locate page
+	struct page_table_entry* pt = pt_lookup(fault_addr);
+	//pin this
+	//grow stack and return
+	if (pt == NULL && fault_addr >= (f->esp - 32)){
+		// && (PHYS_BASE - pg_round_down(fault_addr)) <= STACK_SIZE
+		//printf("exception grow\n");
+		success = grow_stack(fault_addr);
+		if (success == 0){
+			printf ("Page fault at %p: %s error %s page in %s context.\n",
+		        fault_addr,
+		        not_present ? "not present" : "rights violation",
+		        write ? "writing" : "reading",
+		        user ? "user" : "kernel");
+			kill(f);
+		}
+		return;
+	}
+	if (pt == NULL && fault_addr > (f->esp - 32)){
+		printf ("Page fault at %p: %s error %s page in %s context.\n",
+		        fault_addr,
+		        not_present ? "not present" : "rights violation",
+		        write ? "writing" : "reading",
+		        user ? "user" : "kernel");
+		kill(f);
+	}
+	pt->pinned = 1;
+	//printf("not grow\n");
+	//attempt write to read-only page
+	if (write && !pt->write){
+		success = 0;
+	}
+	//obtain frame
+	uint8_t* frame;
+	enum palloc_flags flags = PAL_USER;
+	if (pt->type == 0 && pt->bytes_zero == PGSIZE){
+		flags |= PAL_ZERO;
+	} 
+	frame = get_frame(flags);
+	if (frame == NULL){
+		success = 0;
+	}
+	if (success == 0){
+		printf ("Page fault at %p: %s error %s page in %s context.\n",
+          fault_addr,
+          not_present ? "not present" : "rights violation",
+          write ? "writing" : "reading",
+          user ? "user" : "kernel");
+		kill(f);
+	}
+	//link frame to page table
+	struct frame_table_entry* ft = ft_lookup(frame);
+	//if (ft != NULL){
+		ft->pt = pt;
+	//}
+	//fetch data into frame
+	//printf("possible fetch exception %d %d %d %d\n", pt->addr, frame, pt->loaded, pt->type);
+	success = page_fetch(frame, pt);
+	//success = page_fetch(pt);
+	if (success == 0){
+		//printf("page fetch fail exception\n");
+		printf ("Page fault at %p: %s error %s page in %s context.\n",
+          fault_addr,
+          not_present ? "not present" : "rights violation",
+          write ? "writing" : "reading",
+          user ? "user" : "kernel");
+		kill(f);
+	}
+	//point pte for faulting virtual address to physical page
+	//pt->pagedir is current thread pagedir, can't access here
+	//pt->addr is virtual address
+	//frame is recently allocated
+
+	//install page
+	if (pt->type != 1){
+		success = pagedir_set_page(pt->pagedir, pt->addr, frame, (bool)pt->write);
+		//pagedir_set_dirty(pt->pagedir, pt->addr, false);
+		//pagedir_set_accessed(pt->pagedir, pt->addr, true);
+	}
+	if (success == 0){
+		PANIC("can't load page\n");
+	}
+	
+	pt->pinned = 0;
 }
 
